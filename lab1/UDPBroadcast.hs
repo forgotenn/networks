@@ -1,6 +1,8 @@
 {-# LANGUAGE ScopedTypeVariables #-}
-import Network.Socket
+{-# LANGUAGE OverloadedStrings #-}
 
+import qualified Data.ByteString as BS
+import qualified Data.ByteString.Lazy as BSL
 import qualified Data.ByteString.Char8 as BS8
 import qualified Data.ByteString.Lazy.Char8 as BSLazy8
 
@@ -13,17 +15,11 @@ import Data.Time
 import System.Time
 import System.Posix.User
 import Network.BSD
+import Network.Socket hiding (recvFrom, sendTo)
+import Network.Socket.ByteString
 
 import Message
-
-bbb :: IO ()
-bbb = do
-	n <- newMVar 1
-	let f c = do
-		myN <- takeMVar n
-		putMVar n $ myN + 1
-		forM_ [1..myN] $ \i -> putChar c
-	sequence_ $ map (forkIO . (\x -> f x)) ['a'..'j']
+import MsgInfo
 
 currentUnixTime64 = do
     TOD t _ <- getClockTime
@@ -35,9 +31,10 @@ client = do
     sock <- socket (addrFamily addr) Datagram defaultProtocol
     setSocketOption sock Broadcast 1
     forever $ do
-		msg <- BSLazy8.unpack <$> encode <$> createMsg -- <$> == fmap
-		sendTo sock msg $ addrAddress addr
-		print "Msg sent"
+		msg <- encode <$> createMsg -- <$> == fmap
+--		print $ "length of created msg " ++ show (BSL.length msg)
+		x <- sendAllTo sock (BSL.toStrict msg) $ addrAddress addr
+--		print $ "Msg sent " ++ (show x)
 		threadDelay 1000000
  where
   createMsg :: IO Message
@@ -53,30 +50,37 @@ client = do
      hostFromSockAddr (SockAddrInet _ a) = a
 
 
-server :: MVar Int -> IO ()
-server cnt = do
+server :: MVar MsgInfo -> IO ()
+server info = do
     addr <- head <$> getAddrInfo
         (Just (defaultHints {addrFlags = [AI_PASSIVE]}))
         Nothing (Just "1234")
     sock <- socket (addrFamily addr) Datagram defaultProtocol
     bind sock (addrAddress addr)
+    putStrLn $ "Starting server loop"
     forever $ do 
-		(t, len, _) <- recvFrom sock 10000
---		let msg = decode $ BSLazy8.pack t :: Message
---		print msg
-		print (t, len, length t)
-		modifyMVar_ cnt $ \x -> return (x + 1)
+--		putStrLn ".. Server receiving"
+		(t, _) <- recvFrom sock 10000
+		let msg = decode $ (BSL.fromStrict t) :: Message 
+		insertMsg msg info
+		--modifyMVar_ info (insertMsg msg)
 
-printer :: MVar Int -> IO ()
-printer cnt = forever $ do
-	toPrint <- readMVar cnt
-	print toPrint
+
+printer :: MVar MsgInfo -> IO ()
+printer info = forever $ do
+	log <- showMsgInfo <$> readMVar info
+	let len = maximum $ 1:map length (lines log)
+	putStrLn $ replicate len '='
+	putStrLn log
+	putStrLn $ replicate len '='
 	threadDelay 1000000
-	
+
+
 main = do
-	cnt <- newMVar 0
+	info <- newMVar $ emptyInfo
 	sequence_ $ replicate 10 (forkIO client)
-	forkIO $ (server cnt) `catch` (\(e :: SomeException) -> print e)
-	printer cnt
+	let foreverServer = (server info) `catch` (\(e :: SomeException) -> foreverServer)
+	forkIO $ foreverServer
+	printer info
 	
 	

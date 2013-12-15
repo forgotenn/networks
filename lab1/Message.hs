@@ -9,6 +9,9 @@ import Data.Binary.Get
 import Data.Binary.Put
 import qualified Data.ByteString.Char8 as BS8
 import Data.Bits
+import Control.Applicative
+import Data.Time
+import System.Time
 
 type IPAddress = Word32
 hostnamelength = 20
@@ -27,9 +30,9 @@ addZeros s k = s `append` BS.replicate (k - BS.length s) 0
 instance Binary Message where 
 	get = do
 		ip <- get
-		host <- getByteString hostnamelength
+		host <- BS.takeWhile (/= 0) <$> getByteString hostnamelength
 		time <- get
-		name <- getByteString namelength
+		name <- BS.takeWhile (/= 0) <$> getByteString namelength
 		return $ Message ip host time name
 		
 	put (Message ip host time name) = do
@@ -42,6 +45,8 @@ showIP :: Word32 -> BS.ByteString
 showIP a = BS.intercalate (BS.pack [46]) $ 
     Prelude.map (\sh -> BS8.pack $ show $ (a `shiftR` sh) .&. 255) [24, 16, 8, 0]
 
+showTime :: Word64 -> String
+showTime time = (show $ TOD (fromIntegral time) 0)
 
 instance Show Message where
-	show (Message ip host time name) = show (showIP ip) ++ "|" ++ show (BS.takeWhile (/= 0) host) ++ "|" ++ (show time) ++ "|" ++ show (BS.takeWhile (/= 0) host)
+	show (Message ip host time name) = "ip=" ++ BS8.unpack (showIP ip) ++ "(hostname=" ++ (BS8.unpack host) ++ ", name=" ++ (BS8.unpack name) ++ ") " ++ (showTime time)
